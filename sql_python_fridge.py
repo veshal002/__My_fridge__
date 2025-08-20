@@ -6,8 +6,11 @@
 from sqlite3 import *
 from datetime import datetime
 from tabulate import tabulate
+from datetime import date
+import pandas as pd
 import requests
-
+import schedule
+import time
 
 Headers=['ID','Name','Category','Price','Quantity','Date_of_Purchase','Date_of_Expiry','Days_left',
          'Status']
@@ -29,7 +32,8 @@ def main_menu():
     print("2. View Fridge")
     print("3. View Spoiled Items")
     print("4. Remove items")
-    print("5. Exit")
+    print("5. Do you want to enable Daily alerts? (YES/NO) : ").strip().lower()
+    print("6. Exit")
     choice = input("Choose an option: ")
 
 
@@ -57,9 +61,16 @@ def main_menu():
       remove_items()
 
     elif choice=='5':
-      print('Come Again')
+      if choice =='yes':
+        start_schdeuler()
+      else:
+        print('Scheduler no running..........')
+      print('Exiting.......')
       break
 
+    elif choice =='6':
+      print("Thank you for using <......> ")
+      break    
     else:
       print('Invalid choice...please Try again properly')
 
@@ -78,7 +89,8 @@ def Sqlbase():
     Date_of_Purchase Text not null,
     Date_of_Expiry Text not null,
     Days_Left Integer,
-    Status Text
+    Status Text,
+    Last_alert text
   )
   ''')
   permission.commit()
@@ -152,18 +164,16 @@ def view_fridge():
     ).capitalize().strip()
 
   permission = connect("fridge.db")
-  cursor= permission.cursor()
+  query='SELECT * FROM products'
 
   if category_filter:
-    cursor.execute("SELECT * FROM products WHERE Category = ? ",(category_filter,))
+    query+=f"WHERE Category= '{category_filter}'"
 
-  else :
-    cursor.execute("SELECT * FROM products")
+  df=pd.read_sql_query(query,permission)
+  permission.close()
 
-  rows=cursor.fetchall()
-
-  if rows:
-    print(tabulate(rows, headers=Headers, tablefmt='grid'))
+  if not df.empty:
+    print(tabulate(df, headers="keys", tablefmt='grid'))
   else:
     print("No items found.")
   permission.close()
@@ -213,19 +223,7 @@ def status_refresher():
     (julianday(Date_of_Expiry)-julianday('now')) AS INTEGER
     )
     ''')
-
-  # Check and send msg if exp is near:
-  cursor.execute(''' SELECT Name,Days_Left FROM products
-  WHERE Status = "ACTIVE" AND Days_Left BETWEEN 0 AND 3 ''')
-  expiring_shortly=cursor.fetchall()
-
-  for name,days_left in expiring_shortly:
-    if days_left>0:
-      telegram_message(f"⚠️ {name} will expire in {days_left} day(s)!")
-    elif days_left ==0:
-      telegram_message(f"⏳ {name} expires today!")
-
-
+  
   # Mark spoiled where DaysLeft<=0 and status is still ACTIVE
   cursor.execute('''
   UPDATE products
@@ -326,6 +324,59 @@ def remove_spoiled():
     print(f"Removed {count} spoiled items.")
 
   permission.close()
+
+#-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# BATCH - ALERTER :
+
+def send_alert():
+  
+  # Refresh the DB before alert
+  status_refresher()
+
+  permission=connect("fridge.db")
+  cursor=permission.cursor()
+
+  cursor.execute("""
+    SELECT ID, Name, Date_of_Expiry 
+    FROM products
+    WHERE julianday(Date_of_Expiry) - julianday('now') BETWEEN 0 AND 3
+    AND (Last_alert IS NULL OR Last_alert!=(date('now')))
+""")
+  
+  to_alert = cursor.fetchall()
+
+  for item_id , item_name, expiry_date in to_alert:
+    days_left =(date.fromisoformat(expiry_date) - date.today()).days
+    message=f"⚠️ {item_name} with ID {item_id} will expire in {days_left} days !"
+    telegram_message(message)
+
+
+    cursor.execute('''
+        UPDATE products
+        SET Last_alert = date('now')
+        WHERE ID = ?;
+''',(item_id,))
+    
+  permission.commit()
+  permission.close()
+#-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+# JOB - SCHEDULER :
+
+def job():
+  print("Running Daily check.......")
+  send_alert()
+
+def start_schdeuler():
+  schedule.every().day.at("09:00").do(job)
+  print("Scheduler started! Press CTRL+C to stop.......")
+
+  try:
+    while True:
+      schedule.run_pending()
+      time.sleep(60)
+  except:
+    print("Stopped manually.....")
 
 #-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
