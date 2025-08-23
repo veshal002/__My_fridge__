@@ -22,8 +22,8 @@ category_map={
       '5':'Protein',
       '6':'Other'}
 
-TOKEN = "7998919402:AAHh7w3-1rfs1kKUJe9wkIIKCOUD9m7MSLI"
-CHAT_ID = "975979041"
+TOKEN = "I have it "
+CHAT_ID = "I have it"
 
 class Database:
   
